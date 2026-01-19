@@ -6,11 +6,19 @@ _ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci
 _ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm
 _ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE
 _ZN2nn2fs10CreateFileEPKcl
+_ZN2nn2fs10DeleteFileEPKc
+_ZN2nn2fs9FlushFileENS0_10FileHandleE
 _ZN2nn2fs9CloseFileENS0_10FileHandleE
 _ZN2nn2os15InitializeMutexEPNS0_9MutexTypeEbi
 _ZN2nn2os9LockMutexEPNS0_9MutexTypeE
 _ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE
 @game:303
 actor_move = 0x128ACC0
-proc_draw = 0x2ABC70
-waitForGpuDone = 0x2AC230
+procFrame_ = 0x2abb50
+trySetLayoutMsg = 0x781320
+drawRenderStep_ = 0x3387a0
+xlink_calc = 0x01ca2900
+pushBackToJobQueue_ = 0x420300
+calcLayerDL_ = 0x33a720
+calcSubLayerDL_ = 0x33aa70
+SnapshotTextureMgr_update = 0x471ad0

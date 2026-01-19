@@ -6,12 +6,18 @@ import numpy as np
 dir = r"C:\Users\User\AppData\Roaming\Ryujinx\sdcard"
 #dir = r"C:\Users\User\AppData\Roaming\yuzu\sdmc"
 rng = np.random.default_rng()
+
+rows = [0, 0, 0, 0, 14, 0, 14, 0]
+rwidth = 21
 def genstate():
-	s = np.zeros(21*8, dtype=np.bool)
-	for c in range(50):
-		s[c] = True
-	rng.shuffle(s)
-	return s
+	l = []
+	for rlen in rows:
+		r = np.zeros(rwidth, dtype=np.bool)
+		for i in range(rlen):
+			r[i] = True
+		rng.shuffle(r)
+		l.append(r)
+	return np.concatenate(l,axis=None)
 
 def indtocoord(i):
 	return (i % 21, i // 21)
@@ -88,5 +94,5 @@ def optimize():
 			print(f"Val {v}")
 
 time.sleep(3)
-with open(dir+r"\out.log", "rb", buffering=0) as f_output, open("results_50.log", "a") as f_log:
+with open(dir+r"\out.log", "rb", buffering=0) as f_output, open("results_pow14_koop14.log", "a") as f_log:
 	optimize()

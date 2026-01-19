@@ -15,4 +15,5 @@ namespace type_aliases {
     using int64 = std::int64_t;
 
     using sz = std::size_t;
+    using uptr = std::uintptr_t;
 }

@@ -21,9 +21,11 @@ namespace nn {
         uint32 MountSdCardForDebug(const char* mount);
 
         uint32 CreateFile(const char* path, int64 length);
+        uint32 DeleteFile(const char* path);
         uint32 OpenFile(FileHandle* handle, const char* path, int mode);
         uint32 ReadFile(sz* bytes_read, FileHandle handle, int64 off, void* data, sz bytes_to_read);
         uint32 WriteFile(FileHandle handle, int64 off, const void* data, sz bytes_to_write, const WriteOption& option);
+        uint32 FlushFile(FileHandle handle);
         void CloseFile(FileHandle handle);
     }
 }
