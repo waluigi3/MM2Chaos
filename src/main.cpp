@@ -110,7 +110,6 @@ namespace mmchaos {
         };
 
         nn::fs::WriteOption write_option_empty = {0};
-        nn::fs::FileHandle out_file;
         int64 out_file_pos = 0;
 
         std::array<char, 32768> input_file;
@@ -300,15 +299,14 @@ namespace mmchaos {
             }
         }
 
-        static void write_output_line(int x) {
+        static void write_output_line(nn::fs::FileHandle f, int x) {
             if (x > 9999) {
                 x = 9999;
             }
 
             char buf[16];
             std::snprintf(buf, 16, "%04i\n", x);
-            nn::fs::WriteFile(out_file, out_file_pos, buf, 5, write_option_empty);
-            nn::fs::FlushFile(out_file);
+            nn::fs::WriteFile(f, out_file_pos, buf, 5, write_option_empty);
             out_file_pos += 5;
         }
 
@@ -340,13 +338,29 @@ namespace mmchaos {
         // return true if done
         bool update_output(unsigned int frame) {
             auto pos = output_frame_pos;
+            bool out_open = false;
+            nn::fs::FileHandle out_file;
+
             while (pos < output_frame_len) {
                 if (output_frames[pos] > frame) {
                     break;
                 }
+
+                if (!out_open) {
+                    if (nn::fs::OpenFile(&out_file, OUT_FILE_NAME, nn::fs::MODE_WRITE | nn::fs::MODE_APPEND) != 0) {
+                        continue;
+                    }
+                    out_open = true;
+                }
+                
                 int cc = game::get_clear_count();
-                write_output_line(cc);
+                write_output_line(out_file, cc);
                 pos++;
+            }
+
+            if (out_open) {
+                nn::fs::FlushFile(out_file);
+                nn::fs::CloseFile(out_file);
             }
 
             output_frame_pos = pos;
@@ -425,10 +439,6 @@ namespace mmchaos {
 
         static void run() {
             nn::fs::MountSdCardForDebug("sd");
-
-            if (nn::fs::OpenFile(&out_file, OUT_FILE_NAME, nn::fs::MODE_WRITE | nn::fs::MODE_APPEND) != 0) {
-                return;
-            }
 
             input::init(input_cb);
             frame::init(frame_cb);
