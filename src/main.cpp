@@ -1,3 +1,4 @@
+#include "hk/svc/api.h"
 #include "mmchaos/frame.h"
 #include "mmchaos/game.h"
 #include "nn/fs.h"
@@ -125,7 +126,7 @@ namespace mmchaos {
 
         run_state current_state = WAITING_INPUT;
         exponential_delay file_delay {.start_frame = 0, .delay = 0, .min_delay = 30, .max_delay = 480};
-        bool perf = false;
+        bool perf = true;
 
         static void set_block_key(block_key& key, uint8 world, uint32 x, uint32 y, uint32 id) {
             sz pos = 0;
@@ -443,6 +444,8 @@ namespace mmchaos {
             input::init(input_cb);
             frame::init(frame_cb);
             game::init();
+
+            hk::svc::OutputDebugString("CHAOS LOADED", 12);
         }
     }
 }

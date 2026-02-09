@@ -38,7 +38,7 @@ namespace mmchaos {
         }
 
         // for performance skip following functions
-        std::atomic<bool> performance_mode{false};
+        std::atomic<bool> performance_mode{true};
 
         // very time consuming recursive text layout
         HkTrampoline<bool, void*, void*, void*> trySetLayoutMsg = 
