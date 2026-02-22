@@ -110,6 +110,16 @@ namespace mmchaos {
             RUNNING,
         };
 
+        enum timed_output_type {
+            OUTPUT_CLEAR_COUNT,
+            OUTPUT_SYNC
+        };
+
+        struct timed_output {
+            unsigned int frame;
+            timed_output_type type;
+        };
+
         nn::fs::WriteOption write_option_empty = {0};
         int64 out_file_pos = 0;
 
@@ -119,7 +129,7 @@ namespace mmchaos {
         uint64 pressed_buttons = 0;
         int timed_input_len = 0;
         int timed_input_pos = 0;
-        std::array<unsigned int, 16> output_frames;
+        std::array<timed_output, 16> output_frames;
         int output_frame_len = 0;
         int output_frame_pos = 0;
         unsigned int frame_offset = 0;
@@ -221,6 +231,24 @@ namespace mmchaos {
             case '-':
                 button = nn::hid::BUTTON_MINUS;
                 break;
+            case 'a':
+                button = nn::hid::BUTTON_A;
+                break;
+            case 'b':
+                button = nn::hid::BUTTON_B;
+                break;
+            case 'x':
+                button = nn::hid::BUTTON_X;
+                break;
+            case 'y':
+                button = nn::hid::BUTTON_Y;
+                break;
+            case '[':
+                button = nn::hid::BUTTON_ZL;
+                break;
+            case ']':
+                button = nn::hid::BUTTON_ZR;
+                break;
             default:
                 return;
             }
@@ -231,7 +259,7 @@ namespace mmchaos {
             timed_input_len++;
         }
 
-        static void parse_out_line(std::string_view line) {
+        static void parse_out_line(std::string_view line, timed_output_type out_type) {
             unsigned int frame;
 
             if (output_frame_len >= output_frames.size()) {
@@ -241,7 +269,8 @@ namespace mmchaos {
             auto res = std::from_chars(line.data(), line.data() + 6, frame);
             PARSE_ERR_RET(res);
 
-            output_frames[output_frame_len] = frame;
+            output_frames[output_frame_len].type = out_type;
+            output_frames[output_frame_len].frame = frame;
             output_frame_len++;
         }
 
@@ -282,7 +311,11 @@ namespace mmchaos {
                     pos += IN_FILE_KEY_LEN;
                     pos = parse_skip_newline(map_view, pos);
                 } else if (command == "o   " && read >= pos + IN_FILE_OUT_LEN) {
-                    parse_out_line(std::string_view(map_view.data() + pos, IN_FILE_OUT_LEN));
+                    parse_out_line(std::string_view(map_view.data() + pos, IN_FILE_OUT_LEN), OUTPUT_CLEAR_COUNT);
+                    pos += IN_FILE_OUT_LEN;
+                    pos = parse_skip_newline(map_view, pos);
+                } else if (command == "s   " && read >= pos + IN_FILE_OUT_LEN) {
+                    parse_out_line(std::string_view(map_view.data() + pos, IN_FILE_OUT_LEN), OUTPUT_SYNC);
                     pos += IN_FILE_OUT_LEN;
                     pos = parse_skip_newline(map_view, pos);
                 }
@@ -300,7 +333,7 @@ namespace mmchaos {
             }
         }
 
-        static void write_output_line(nn::fs::FileHandle f, int x) {
+        static void write_output_cc_line(nn::fs::FileHandle f, int x) {
             if (x > 9999) {
                 x = 9999;
             }
@@ -343,7 +376,8 @@ namespace mmchaos {
             nn::fs::FileHandle out_file;
 
             while (pos < output_frame_len) {
-                if (output_frames[pos] > frame) {
+                timed_output& current = output_frames[pos];
+                if (current.frame > frame) {
                     break;
                 }
 
@@ -354,8 +388,14 @@ namespace mmchaos {
                     out_open = true;
                 }
                 
-                int cc = game::get_clear_count();
-                write_output_line(out_file, cc);
+                if (current.type == OUTPUT_CLEAR_COUNT) {
+                    int cc = game::get_clear_count();
+                    write_output_cc_line(out_file, cc);
+                } else if (current.type == OUTPUT_SYNC) {
+                    nn::fs::WriteFile(out_file, out_file_pos, "SYNC\n", 5, write_option_empty);
+                    out_file_pos += 5;
+                }
+                
                 pos++;
             }
 
