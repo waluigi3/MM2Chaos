@@ -1,75 +1,28 @@
+#include "hk/hook/Trampoline.h"
 #include "hk/svc/api.h"
 #include "mmchaos/frame.h"
 #include "mmchaos/game.h"
-#include "nn/fs.h"
+#include "mmchaos/logger.h"
+#include "mmchaos/bufset.h"
+
 
 #include "mmchaos/types.h"
 #include "mmchaos/input.h"
 #include "mmchaos/bufmap.h"
 #include "nn/hid.h"
+#include "nn/fs.h"
+#include "types.h"
 
 #include <array>
 #include <charconv>
+#include <cinttypes>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string_view>
 #include <system_error>
-
-/*
-static nn::fs::FileHandle f1;
-static std::array<std::uint8_t, 256> buf;
-static int buf_pos = 0;
-static int file_pos = 0;
-static bool recording = false;
-static HkTrampoline<bool, void*> pos_func = 
-        hk::hook::trampoline([](void* t) -> bool {
-            bool ret = pos_func.orig(t);
-
-            if (!recording) {
-                return ret;
-            }
-
-            std::uintptr_t vtable = *(std::uintptr_t*)t;
-
-            // Get object address
-            std::memcpy(&buf[buf_pos], &t, sizeof(t));
-            buf_pos += sizeof(t);
-
-            // Get vtable address (objectid)
-            std::memcpy(&buf[buf_pos], &vtable, sizeof(vtable));
-            buf_pos += sizeof(vtable);
-
-            float* pos = (float*)(((uint8_t*)t)+0x230);
-            std::memcpy(&buf[buf_pos], pos, sizeof(float)*3);
-            buf_pos += sizeof(float)*3;
-
-            nn::fs::WriteOption option = {.flags = nn::fs::WRITE_OPTION_FLUSH};
-            if (buf_pos > 220) {
-                nn::fs::WriteFile(f1, file_pos, buf.data(), buf_pos, option);
-                file_pos += buf_pos;
-                buf_pos = 0;
-            }
-
-            return ret;
-        });
-
-static void record_triggered() {
-    if (recording) {
-        nn::fs::WriteOption option = {.flags = nn::fs::WRITE_OPTION_FLUSH};
-        nn::fs::WriteFile(f1, file_pos, buf.data(), buf_pos, option);
-        nn::fs::CloseFile(f1);
-    } else {
-        char buf[64];
-        std::uint64_t ticks = hk::svc::getSystemTick();
-        std::snprintf(buf, 64, "sd:/%" PRIu64 ".bin", ticks);
-        nn::fs::CreateFile(buf, 0);
-        nn::fs::OpenFile(&f1, buf, nn::fs::MODE_WRITE | nn::fs::MODE_APPEND);
-    }
-    recording = !recording;
-}
-*/
 
 namespace mmchaos {
     namespace main {
@@ -80,6 +33,8 @@ namespace mmchaos {
         constexpr sz IN_FILE_COMMAND_LEN = 4;
         constexpr sz IN_FILE_KEY_LEN = 8;
         constexpr sz IN_FILE_OUT_LEN = 6;
+        constexpr sz IN_FILE_FLUSH_LEN = 6;
+        constexpr sz IN_FILE_SET_LEN = 4;
         const char* IN_FILE_NAME = "sd:/command.txt";
         const char* OUT_FILE_NAME = "sd:/out.log";
 
@@ -120,8 +75,10 @@ namespace mmchaos {
             timed_output_type type;
         };
 
-        nn::fs::WriteOption write_option_empty = {0};
-        int64 out_file_pos = 0;
+        enum set_type {
+            SET_SPAWN,
+            SET_DIE
+        };
 
         std::array<char, 32768> input_file;
         bufmap<block_key, block_update, 256> block_map;
@@ -133,10 +90,40 @@ namespace mmchaos {
         int output_frame_len = 0;
         int output_frame_pos = 0;
         unsigned int frame_offset = 0;
+        logger::log_ctx out_log;
+        bufset<uint32, 16> spawn_id_set;
+        bufset<uint32, 16> die_id_set;
 
         run_state current_state = WAITING_INPUT;
         exponential_delay file_delay {.start_frame = 0, .delay = 0, .min_delay = 30, .max_delay = 480};
         bool perf = true;
+        uint32 flush_interval = 0; // in frames
+        uint32 flush_counter = 0;
+        bool game_loaded = false;
+
+        static void log_flush_timer() {
+            if (flush_counter >= flush_interval) {
+                flush_counter = 0;
+                logger::log_flush(out_log);
+            } else if (flush_interval > 0) {
+                flush_counter++;
+            }
+        }
+
+        // don't write 512+ chars or it will fail
+        static void log(const char* fmt, ...) {
+            constexpr sz BUF_LEN = 512;
+            char buf[BUF_LEN];
+            std::va_list args;
+            va_start(args, fmt);
+
+            int len = std::vsnprintf(buf, BUF_LEN, fmt, args);
+            if (len > 0 && len < BUF_LEN) {
+                logger::log_write(out_log, buf, len);
+            }
+
+            va_end(args);
+        }
 
         static void set_block_key(block_key& key, uint8 world, uint32 x, uint32 y, uint32 id) {
             sz pos = 0;
@@ -274,6 +261,36 @@ namespace mmchaos {
             output_frame_len++;
         }
 
+        static void parse_set_line(std::string_view line, set_type set_type) {
+            uint32 object_id;
+            auto res = std::from_chars(line.data(), line.data() + IN_FILE_SET_LEN, object_id);
+            PARSE_ERR_RET(res);
+
+            if (set_type == SET_SPAWN) {
+                if (object_id == 9999) {
+                    spawn_id_set.add_all();
+                } else {
+                    spawn_id_set.add(object_id);
+                }
+            } else if (set_type == SET_DIE) {
+                if (object_id == 9999) {
+                    die_id_set.add_all();
+                } else {
+                    die_id_set.add(object_id);
+                }
+            }
+        }
+
+        static void parse_flush_line(std::string_view line) {
+            unsigned int interval;
+
+            auto res = std::from_chars(line.data(), line.data() + IN_FILE_FLUSH_LEN, interval);
+            PARSE_ERR_RET(res);
+
+            flush_counter = 0;
+            flush_interval = interval;
+        }
+
         static bool load_commands(const char* path) {
             nn::fs::FileHandle f;
             bool success = nn::fs::OpenFile(&f, path, nn::fs::MODE_READ) == 0;
@@ -293,6 +310,8 @@ namespace mmchaos {
             timed_input_pos = 0;
             output_frame_len = 0;
             output_frame_pos = 0;
+            spawn_id_set.clear();
+            die_id_set.clear();
 
             size_t pos = 0;
             while (read >= pos + IN_FILE_COMMAND_LEN) {
@@ -318,6 +337,18 @@ namespace mmchaos {
                     parse_out_line(std::string_view(map_view.data() + pos, IN_FILE_OUT_LEN), OUTPUT_SYNC);
                     pos += IN_FILE_OUT_LEN;
                     pos = parse_skip_newline(map_view, pos);
+                } else if (command == "as  " && read >= pos + IN_FILE_SET_LEN) {
+                    parse_set_line(std::string_view(map_view.data() + pos, IN_FILE_SET_LEN), SET_SPAWN);
+                    pos += IN_FILE_SET_LEN;
+                    pos = parse_skip_newline(map_view, pos);
+                } else if (command == "ad  " && read >= pos + IN_FILE_SET_LEN) {
+                    parse_set_line(std::string_view(map_view.data() + pos, IN_FILE_SET_LEN), SET_DIE);
+                    pos += IN_FILE_SET_LEN;
+                    pos = parse_skip_newline(map_view, pos);
+                } else if (command == "fi  " && read >= pos + IN_FILE_FLUSH_LEN) {
+                    parse_flush_line(std::string_view(map_view.data() + pos, IN_FILE_FLUSH_LEN));
+                    pos += IN_FILE_FLUSH_LEN;
+                    pos = parse_skip_newline(map_view, pos);
                 }
             }
 
@@ -331,17 +362,6 @@ namespace mmchaos {
             if (mapping.has_value()) {
                 b->attr1 = mapping->newattribute;
             }
-        }
-
-        static void write_output_cc_line(nn::fs::FileHandle f, int x) {
-            if (x > 9999) {
-                x = 9999;
-            }
-
-            char buf[16];
-            std::snprintf(buf, 16, "%04i\n", x);
-            nn::fs::WriteFile(f, out_file_pos, buf, 5, write_option_empty);
-            out_file_pos += 5;
         }
 
         // return true if done
@@ -372,36 +392,23 @@ namespace mmchaos {
         // return true if done
         bool update_output(unsigned int frame) {
             auto pos = output_frame_pos;
-            bool out_open = false;
-            nn::fs::FileHandle out_file;
 
             while (pos < output_frame_len) {
                 timed_output& current = output_frames[pos];
                 if (current.frame > frame) {
                     break;
                 }
-
-                if (!out_open) {
-                    if (nn::fs::OpenFile(&out_file, OUT_FILE_NAME, nn::fs::MODE_WRITE | nn::fs::MODE_APPEND) != 0) {
-                        continue;
-                    }
-                    out_open = true;
-                }
                 
                 if (current.type == OUTPUT_CLEAR_COUNT) {
                     int cc = game::get_clear_count();
-                    write_output_cc_line(out_file, cc);
+                    cc = (cc > 9999) ? 9999 : cc;
+                    log("%04i\n", cc);
                 } else if (current.type == OUTPUT_SYNC) {
-                    nn::fs::WriteFile(out_file, out_file_pos, "SYNC\n", 5, write_option_empty);
-                    out_file_pos += 5;
+                    log("SYNC\n");
+                    logger::log_flush(out_log);
                 }
                 
                 pos++;
-            }
-
-            if (out_open) {
-                nn::fs::FlushFile(out_file);
-                nn::fs::CloseFile(out_file);
             }
 
             output_frame_pos = pos;
@@ -469,6 +476,8 @@ namespace mmchaos {
                     current_state = WAITING_INPUT;
                 }
             }
+
+            log_flush_timer();
         }
 
         void input_cb(uint64 buttons_triggered) {
@@ -478,12 +487,48 @@ namespace mmchaos {
             }
         }
 
+        // following hooks should occur on same thread so no syncronization needed
+
+        // hook to output actor spawns
+        HkTrampoline<void, game::actor*, void*> actor_init = 
+            hk::hook::trampoline([](game::actor* t, void* u) -> void {
+                actor_init.orig(t, u);
+
+                if (spawn_id_set.contains(t->object_id)) {
+                    log("C|%" PRIu32 "|%.0f|%.0f\n", t->object_id, t->x, t->y);
+                }
+
+                if (!game_loaded) {
+                    game_loaded = true;
+                    log("LOAD\n");
+                    logger::log_flush(out_log);
+                }
+        });
+
+        constexpr uint32 DEAD_FLAG = 0x100;
+        // hook to output "enemy" deaths
+        HkTrampoline<void, game::enemyuber*> enemyuber_status_update = 
+            hk::hook::trampoline([](game::enemyuber* t) -> void {
+                uint32 old_dead_flag = t->actor.flags & DEAD_FLAG;
+                enemyuber_status_update.orig(t);
+                uint32 dead_flag = t->actor.flags & DEAD_FLAG;
+
+                if (die_id_set.contains(t->actor.object_id) && old_dead_flag == 0 && dead_flag != 0) {
+                    log("D|%" PRIu32 "|%.0f|%.0f|%.0f|%.0f\n", t->actor.object_id, t->actor.x, t->actor.y, t->x_orig, t->y_orig);
+                }
+        });
+
         static void run() {
             nn::fs::MountSdCardForDebug("sd");
+
+            logger::log_init(out_log, OUT_FILE_NAME);
 
             input::init(input_cb);
             frame::init(frame_cb);
             game::init();
+
+            actor_init.installAtSym<"actor_init">();
+            enemyuber_status_update.installAtSym<"enemyuber_status_update">();
 
             hk::svc::OutputDebugString("CHAOS LOADED", 12);
         }

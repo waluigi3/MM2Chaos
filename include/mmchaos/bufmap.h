@@ -1,11 +1,13 @@
 #pragma once
 
+#include "types.h"
+
 #include <array>
 #include <optional>
 
 namespace mmchaos {
     // Thanks to Robert Sedgewick for left leaning red black trees
-    template <class Key, class V, size_t N>
+    template <class Key, class V, sz N>
     class bufmap {
         static constexpr bool RED = true;
         static constexpr bool BLACK = false;

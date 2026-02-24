@@ -22,3 +22,5 @@ pushBackToJobQueue_ = 0x420300
 calcLayerDL_ = 0x33a720
 calcSubLayerDL_ = 0x33aa70
 SnapshotTextureMgr_update = 0x471ad0
+actor_init = 0x8d6e30
+enemyuber_status_update = 0x1296da0

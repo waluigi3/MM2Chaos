@@ -13,8 +13,6 @@ set(SOURCES ${SOURCES_ASM} ${SOURCES_C} ${SOURCES_CXX})
 add_executable(${PROJECT_NAME} ${SOURCES})
 include_directories(include)
 
-add_compile_definitions(HK_TODO=void)
-
 include(sys/cmake/module.cmake)
 include(sys/cmake/deploy.cmake)
 include(sys/cmake/sail.cmake)
